@@ -14,6 +14,14 @@ import asyncio
 import httpx
 import gc
 from threading import Thread
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+# An HF_TOKEN is recommended to download models from Hugging Face
+load_dotenv()
+
+if not os.environ.get("HF_TOKEN"):
+    raise ValueError("HF_TOKEN environment variable is not set")    
 
 # Default model
 DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -115,7 +123,6 @@ def get_pipeline(model_name: str):
         tic = current_time
         model_cache.current_pipeline = pipeline("image-text-to-text", 
                                                 model=model_name, 
-                                                token=False, 
                                                 trust_remote_code=True, 
                                                 device_map="auto", 
                                                 dtype=torch.bfloat16)
@@ -134,6 +141,12 @@ async def chat_completions(request: ChatCompletionRequest):
         unload_ollama_models()  # Ensure Ollama models are unloaded before processing new request   
         try:
             model_name = request.model
+
+            models = await get_models()
+            names = [m['repo_id'] for m in models['models']]
+            if model_name not in names:
+                raise HTTPException(status_code=400, detail=f"Model '{model_name}' is not downloaded. Available models are: {', '.join(names)}")
+
             messages = request.messages
             # Adaptar messages al formato esperado por el pipeline
             for user_message in messages:
