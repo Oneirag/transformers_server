@@ -21,11 +21,16 @@ This FastAPI server simulates the OpenAI API for chat completions, using transfo
 
 ## Running the Server
 
+You can configure the server using environment variables or a `.env` file:
+- `PIPELINE_SERVER_HOST`: The host interface to bind to (default: `0.0.0.0`).
+- `PIPELINE_SERVER_PORT`: The port to listen on (default: `8880`).
+- `PIPELINE_SERVER_TIMEOUT`: The idle timeout in seconds before unloading the model (default: `300`).
+
 ```bash
-python pipeline_server.py
+PIPELINE_SERVER_PORT=8000 python pipeline_server.py
 ```
 
-The server will be available at `http://localhost:8000`.
+The server will be available at `http://localhost:8880` by default.
 
 ## Endpoints
 
@@ -112,6 +117,30 @@ curl http://localhost:8000/models
       "repo_id": "Qwen/Qwen2.5-VL-7B-Instruct",
       "repo_type": "model",
       "size_on_disk": 123456789
+    }
+  ]
+}
+```
+
+### GET /v1/models
+
+Lists locally cached models in a format compatible with the OpenAI API.
+
+**Example:**
+```bash
+curl http://localhost:8000/v1/models
+```
+
+**Response:**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "Qwen/Qwen2.5-VL-7B-Instruct",
+      "object": "model",
+      "created": 1709230000,
+      "owned_by": "huggingface"
     }
   ]
 }

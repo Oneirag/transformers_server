@@ -29,9 +29,13 @@ DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 OLLAMA_HOST = httpx.URL(os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
 
 # Timeout for unloading models (300s by default)
-TIMEOUT = 300
+TIMEOUT = int(os.environ.get("PIPELINE_SERVER_TIMEOUT", 300))
 
 class ModelCache:
+    """
+    In-memory storage for the currently loaded model and its pipeline.
+    This ensures only one model occupies GPU memory at a time.
+    """
     def __init__(self):
         self.current_model = None
         self.current_pipeline = None
@@ -43,10 +47,12 @@ model_cache = ModelCache()
 request_lock = asyncio.Lock()
 
 class Message(BaseModel):
+    """Represents a single message in the chat conversation."""
     role: str
     content: Any  # Can be str or list of dicts
 
 class ChatCompletionRequest(BaseModel):
+    """Represents a request body for the chat completion endpoint."""
     model: str = DEFAULT_MODEL
     messages: List[Message]
     max_tokens: Optional[int] = None
@@ -55,6 +61,7 @@ class ChatCompletionRequest(BaseModel):
     # Other optional parameters...
 
 class ChatCompletionResponse(BaseModel):
+    """Represents the standard JSON response body for a successful non-streaming chat completion."""
     id: str
     object: str = "chat.completion"
     created: int
@@ -64,6 +71,10 @@ class ChatCompletionResponse(BaseModel):
 
 
 def unload_model_cache():
+    """
+    Clears the currently loaded pipeline and model from memory.
+    Explicitly deletes attributes, triggers garbage collection, and empties the CUDA cache.
+    """
     if model_cache.current_pipeline is not None:
         print(f"Unloading model: {model_cache.current_model}")
         
@@ -86,6 +97,10 @@ def unload_model_cache():
         print("To completely release 100% of GPU memory, the Python process must be terminated.")
         
 def cleanup():
+    """
+    Background worker that runs periodically to check for inactivity.
+    If the timeout period has elapsed since the last model usage, it unloads the model.
+    """
     while True:
         sleep(10)  # Check every 10 seconds
         if model_cache.current_pipeline is not None:
@@ -97,6 +112,10 @@ def cleanup():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan manager. 
+    Starts the background cleanup thread on application startup.
+    """
     # Startup
     threading.Thread(target=cleanup, daemon=True).start()
     yield
@@ -105,6 +124,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 def unload_ollama_models():
+    """
+    Gracefully sends a request to a local Ollama instance (if any) to unload its active models.
+    This prevents memory clashes between Ollama and this server.
+    """
     try:
         models = httpx.get(f"{OLLAMA_HOST}/api/ps").json()
         for model in models['models']:
@@ -115,6 +138,11 @@ def unload_ollama_models():
         print("Ollama server not running or unreachable.")
 
 def get_pipeline(model_name: str):
+    """
+    Retrieves the requested model pipeline. 
+    If a different model is currently loaded, it unloads it first to free up memory before loading the new one.
+    Updates the 'last_used' timestamp for the model cache.
+    """
     current_time = time()
     if model_cache.current_model != model_name:
         if model_cache.current_pipeline is not None:
@@ -137,6 +165,11 @@ def get_pipeline(model_name: str):
 @app.post("/v1/chat/completions")
 @app.get("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
+    """
+    OpenAI-compatible chat completions endpoint.
+    Handles both unified single-shot generation and streaming responses via Server-Sent Events (SSE).
+    Translates OpenAI standard message formats (including images) into the format expected by the Hugging Face pipelines.
+    """
     async with request_lock:
         unload_ollama_models()  # Ensure Ollama models are unloaded before processing new request   
         try:
@@ -263,6 +296,10 @@ async def chat_completions(request: ChatCompletionRequest):
 
 @app.get("/status")
 async def get_status():
+    """
+    Returns the current status of the server, including the name of the currently loaded model
+    and the remaining time in seconds before it is automatically unloaded due to inactivity.
+    """
     if model_cache.current_model is not None:
         remaining = TIMEOUT - (time() - model_cache.last_used)
         if remaining > 0:
@@ -286,6 +323,10 @@ async def get_status():
 
 @app.post("/unload")
 async def unload_model():
+    """
+    Provides an API endpoint to manually force the unloading of the currently loaded model.
+    Useful for freeing up GPU memory without waiting for the inactivity timeout.
+    """
     if model_cache.current_pipeline is not None:
         model_name = model_cache.current_model
         print(f"Manually unloading model: {model_name}")
@@ -302,6 +343,10 @@ async def unload_model():
 
 @app.get("/models")
 async def get_models():
+    """
+    Queries the underlying Hugging Face cache using the `hf cache ls` CLI tool.
+    Returns raw metadata about locally downloaded models and datasets.
+    """
     try:
         # Use full path to hf from the virtual environment
         venv_bin = os.path.dirname(sys.executable)
@@ -316,7 +361,38 @@ async def get_models():
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="hf command not found. Ensure the virtual environment is activated.")
 
+@app.get("/v1/models")
+async def v1_get_models():
+    """
+    Simulates the OpenAI /v1/models endpoint.
+    Retrieves the list of locally cached models matching huggingface cache and structures
+    it in the format expected by OpenAI API clients.
+    """
+    models_response = await get_models()
+    models_data = models_response.get("models", [])
+    
+    data = []
+    # Iterate through cached Hugging Face models and datasets
+    for m in models_data:
+        # Filter for only models (ignoring datasets or other repo types)
+        if m['repo_type'] == "model":
+            data.append({
+                "id": m.get("repo_id", "unknown-model"), # Map repo_id to model id
+                "object": m.get("repo_type", "model"), # Object is 'model' in OpenAI format
+                "created": int(m.get("last_modified", time())), # Unix timestamp of last modification
+                "owned_by": "huggingface", # Set owner static text
+        })
+    
+    return {
+        "object": "list",
+        "data": data
+    }
+
 if __name__ == "__main__":
     import uvicorn
     import traceback
-    uvicorn.run(app, host="0.0.0.0", port=8880)
+    
+    host = os.environ.get("PIPELINE_SERVER_HOST", "0.0.0.0")
+    port = int(os.environ.get("PIPELINE_SERVER_PORT", 8880))
+    
+    uvicorn.run(app, host=host, port=port)
