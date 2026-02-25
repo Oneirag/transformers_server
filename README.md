@@ -21,16 +21,44 @@ This FastAPI server simulates the OpenAI API for chat completions, using transfo
 
 ## Running the Server
 
+**Important Prerequisite:** Both server implementations require a Hugging Face API token to download and access models. You MUST define the `HF_TOKEN` environment variable before starting either server:
+
+```bash
+export HF_TOKEN="your_huggingface_token_here"
+```
+
+This project provides two different server implementations depending on your needs.
+
+### 1. Transformers Pipeline Server (`transformers_pipeline_server.py`)
+
+A pure HuggingFace Transformers implementation suitable for Vision-Language Models (VLMs) and standard LLMs. 
+
 You can configure the server using environment variables or a `.env` file:
 - `PIPELINE_SERVER_HOST`: The host interface to bind to (default: `0.0.0.0`).
 - `PIPELINE_SERVER_PORT`: The port to listen on (default: `8880`).
 - `PIPELINE_SERVER_TIMEOUT`: The idle timeout in seconds before unloading the model (default: `300`).
 
 ```bash
-PIPELINE_SERVER_PORT=8000 python pipeline_server.py
+PIPELINE_SERVER_PORT=8880 python transformers_pipeline_server.py
 ```
 
 The server will be available at `http://localhost:8880` by default.
+
+### 2. vLLM Proxy Server (`vllm_server.py`)
+
+A lazy-loading proxy server that wraps `vLLM` for high-throughput inference. It automatically starts `vLLM` on-demand and kills the process after inactivity to free up GPU memory.
+
+You can configure the server using environment variables or a `.env` file:
+- `PROXY_PORT`: The port the proxy listens on (default: `8888`).
+- `VLLM_PORT`: The internal port where vLLM runs (default: `8889`).
+- `INACTIVITY_TIMEOUT`: The idle timeout in seconds before shutting down vLLM (default: `300`).
+- `VLLM_PROXY_ALLOWED_API_KEYS`: Comma-separated list of allowed API keys for administrative endpoints.
+
+```bash
+PROXY_PORT=8888 python vllm_server.py
+```
+
+This proxy server will be available at `http://localhost:8888` by default and will transparently route OpenAI-compatible requests to the underlying vLLM instance.
 
 ## Endpoints
 

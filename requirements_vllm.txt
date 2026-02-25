@@ -1,0 +1,14 @@
+# accelerate>=1.4.0
+# # flash-attn>=2.7.4.post1
+# pip>=25.0.1
+# python-json-logger>=3.2.1
+# qwen-vl-utils>=0.0.10
+# setuptools>=75.8.0
+# torchvision>=0.21.0
+# transformers>4.53.0     # 4.53.0 has a bug
+# wheel>=0.45.1
+# vllm>=0.7.3
+# ## Slow as it has to be compiled to march last libraries version
+# ##flashinfer-python
+
+vllm

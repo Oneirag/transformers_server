@@ -1,8 +1,15 @@
 from openai import OpenAI
+import os
+from dotenv import load_dotenv
 
-host = "http://localhost:8880"
+load_dotenv()
 
-client = OpenAI(base_url=f"{host}/v1", api_key="<random_string>")
+host = os.environ.get("PIPELINE_SERVER_HOST", "http://localhost")
+if not host.startswith("http"):
+    host = f"http://{host}"
+port = os.environ.get("PIPELINE_SERVER_PORT", 8880)
+
+client = OpenAI(base_url=f"{host}:{port}/v1", api_key="<random_string>")
 
 for stream in False, True:
     completion = client.chat.completions.create(

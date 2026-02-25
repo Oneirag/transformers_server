@@ -15,6 +15,8 @@ import httpx
 import gc
 from threading import Thread
 from dotenv import load_dotenv
+from utils.models_endpoints import add_models_endpoints, get_models
+from utils.unload_services import unload_ollama_models, unload_vllm_models, unload_trasformers_models
 
 # Load environment variables from .env file
 # An HF_TOKEN is recommended to download models from Hugging Face
@@ -25,8 +27,6 @@ if not os.environ.get("HF_TOKEN"):
 
 # Default model
 DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
-
-OLLAMA_HOST = httpx.URL(os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
 
 # Timeout for unloading models (300s by default)
 TIMEOUT = int(os.environ.get("PIPELINE_SERVER_TIMEOUT", 300))
@@ -122,20 +122,8 @@ async def lifespan(app: FastAPI):
     # Shutdown (nothing needed for daemon thread)
 
 app = FastAPI(lifespan=lifespan)
+add_models_endpoints(app)
 
-def unload_ollama_models():
-    """
-    Gracefully sends a request to a local Ollama instance (if any) to unload its active models.
-    This prevents memory clashes between Ollama and this server.
-    """
-    try:
-        models = httpx.get(f"{OLLAMA_HOST}/api/ps").json()
-        for model in models['models']:
-            model_name = model['name']
-            httpx.post(f"{OLLAMA_HOST}/api/generate", json={"model": model_name, "keep_alive": 0})
-            print(f"Ollama model {model_name} unloaded")
-    except httpx.ConnectError:
-        print("Ollama server not running or unreachable.")
 
 def get_pipeline(model_name: str):
     """
@@ -149,11 +137,15 @@ def get_pipeline(model_name: str):
             unload_model_cache()
         print(f"Loading pipeline for model: {model_name}")
         tic = current_time
-        model_cache.current_pipeline = pipeline("image-text-to-text", 
-                                                model=model_name, 
-                                                trust_remote_code=True, 
-                                                device_map="auto", 
-                                                dtype=torch.bfloat16)
+        model_cache.current_pipeline = pipeline(
+            # task="image-text-to-text", 
+            # task="text-generation",
+            model=model_name, 
+            trust_remote_code=True, 
+            device_map="auto", 
+            dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",
+        )
         model_cache.current_model = model_name
         model_cache.last_used = current_time
         print(f"Pipeline loaded in {time() - tic:.2f}s")
@@ -172,6 +164,7 @@ async def chat_completions(request: ChatCompletionRequest):
     """
     async with request_lock:
         unload_ollama_models()  # Ensure Ollama models are unloaded before processing new request   
+        unload_vllm_models()    # Ensure vLLM models are unloaded before processing new request
         try:
             model_name = request.model
 
@@ -332,61 +325,15 @@ async def unload_model():
         print(f"Manually unloading model: {model_name}")
         unload_model_cache()
         return {
-            "message": f"Model {model_name} unloaded successfully. Note: Some GPU memory (around 356MB) may still be in use by CUDA context.",
+            "message": f"Transformers model {model_name} unloaded successfully. Note: Some GPU memory (around 356MB) may still be in use by CUDA context.",
             "status": "unloaded"
         }
     else:
         return {
-            "message": "No model is currently loaded.",
+            "message": "No transformers model to unload.",
             "status": "no_action"
         }
 
-@app.get("/models")
-async def get_models():
-    """
-    Queries the underlying Hugging Face cache using the `hf cache ls` CLI tool.
-    Returns raw metadata about locally downloaded models and datasets.
-    """
-    try:
-        # Use full path to hf from the virtual environment
-        venv_bin = os.path.dirname(sys.executable)
-        hf_path = os.path.join(venv_bin, "hf")
-        result = subprocess.run([hf_path, "cache", "ls", "--format", "json"], capture_output=True, text=True, check=True)
-        cache_data = json.loads(result.stdout)
-        return {"models": cache_data}
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Error running hf cache ls: {e}")
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Error parsing JSON: {e}")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="hf command not found. Ensure the virtual environment is activated.")
-
-@app.get("/v1/models")
-async def v1_get_models():
-    """
-    Simulates the OpenAI /v1/models endpoint.
-    Retrieves the list of locally cached models matching huggingface cache and structures
-    it in the format expected by OpenAI API clients.
-    """
-    models_response = await get_models()
-    models_data = models_response.get("models", [])
-    
-    data = []
-    # Iterate through cached Hugging Face models and datasets
-    for m in models_data:
-        # Filter for only models (ignoring datasets or other repo types)
-        if m['repo_type'] == "model":
-            data.append({
-                "id": m.get("repo_id", "unknown-model"), # Map repo_id to model id
-                "object": m.get("repo_type", "model"), # Object is 'model' in OpenAI format
-                "created": int(m.get("last_modified", time())), # Unix timestamp of last modification
-                "owned_by": "huggingface", # Set owner static text
-        })
-    
-    return {
-        "object": "list",
-        "data": data
-    }
 
 if __name__ == "__main__":
     import uvicorn

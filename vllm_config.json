@@ -1,0 +1,6 @@
+{
+    "max_model_len": "16384",
+    "enforce_eager": true,
+    "gpu_memory_utilization": 0.9,
+    "trust_remote_code": true
+}
