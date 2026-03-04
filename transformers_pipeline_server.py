@@ -148,7 +148,7 @@ def get_pipeline(model_name: str):
         )
         model_cache.current_model = model_name
         model_cache.last_used = current_time
-        print(f"Pipeline loaded in {time() - tic:.2f}s")
+        print(f"Pipeline for model {model_name} loaded in {time() - tic:.2f}s")
     else:
         # Update last_used
         model_cache.last_used = current_time
@@ -167,6 +167,7 @@ async def chat_completions(request: ChatCompletionRequest):
         unload_vllm_models()    # Ensure vLLM models are unloaded before processing new request
         try:
             model_name = request.model
+            print(f"Received request for model: {model_name}")
 
             models = await get_models()
             names = [m['repo_id'] for m in models['models']]

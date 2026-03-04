@@ -214,7 +214,7 @@ class VLLMProxy:
                 self.stop_vllm()
                 break
             else:
-                logger.info(f"vLLM to be unloaded in {INACTIVITY_TIMEOUT - elapsed:.2f}s.")
+                logger.info(f"vLLM model {self.current_model} to be unloaded in {INACTIVITY_TIMEOUT - elapsed:.2f}s.")
 
 proxy = VLLMProxy()
 
@@ -278,6 +278,7 @@ async def proxy_all(request: Request, path: str):
     
     if not model_name:
         model_name = query_params.get("model", proxy.current_model or "facebook/opt-125m") # Defaulting or using current
+    logger.info(f"Received request for model: {model_name} on path: {path}")
 
     # If vLLM is not running, start it
     try:
