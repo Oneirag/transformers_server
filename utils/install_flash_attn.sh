@@ -11,7 +11,7 @@ export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 export TORCH_CUDA_ARCH_LIST="8.6"
 
 export CMAKE_ARGS="-DCMAKE_CXX_STANDARD=17"
-export MAX_JOBS=16
+export MAX_JOBS=4
 
 pip uninstall -y flash-attn flash_attn
 pip install --no-build-isolation .
