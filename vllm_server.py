@@ -110,6 +110,9 @@ class VLLMProxy:
                 # Handle flags (values that are empty or True-ish)
                 if val is None or val == "" or str(val).lower() == "true":
                     cmd.append(f"--{key.replace('_', '-')}")
+                # Skip values with false
+                elif str(val).lower() == "false":
+                    continue
                 else:
                     cmd.append(f"--{key.replace('_', '-')}")
                     cmd.append(str(val))
@@ -183,24 +186,56 @@ class VLLMProxy:
 
     def stop_vllm(self) -> bool:
         """Kill vLLM and its child processes."""
+        stopped = False
         if self.process:
             logger.info(f"Stopping vLLM (PID: {self.process.pid})...")
             try:
-                parent = psutil.Process(self.process.pid)
-                for child in parent.children(recursive=True):
-                    child.kill()
-                parent.kill()
-            except psutil.NoSuchProcess:
-                pass
+                # Attempt to kill the entire process group since we use start_new_session=True
+                os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+            except Exception:
+                try:
+                    parent = psutil.Process(self.process.pid)
+                    for child in parent.children(recursive=True):
+                        try:
+                            child.kill()
+                        except psutil.NoSuchProcess:
+                            pass
+                    parent.kill()
+                except psutil.NoSuchProcess:
+                    pass
             self.process = None
+            stopped = True
+
+        # Fallback: search for any stray vllm serve processes and terminate them
+        for proc in psutil.process_iter(['pid', 'cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline')
+                if cmdline:
+                    cmd_str = " ".join(cmdline)
+                    if "vllm" in cmd_str and "serve" in cmd_str and "vllm_server.py" not in cmd_str:
+                        logger.info(f"Killing stray vLLM process (PID: {proc.info['pid']})...")
+                        try:
+                            os.killpg(os.getpgid(proc.info['pid']), signal.SIGKILL)
+                        except Exception:
+                            for child in proc.children(recursive=True):
+                                try:
+                                    child.kill()
+                                except psutil.NoSuchProcess:
+                                    pass
+                            proc.kill()
+                        stopped = True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+            
+        if stopped:
             self.current_model = None
             logger.info("vLLM stopped.")
-            return True
         
         if self.shutdown_task:
             self.shutdown_task.cancel()
             self.shutdown_task = None
-        return False
+            
+        return stopped
 
     async def monitor_inactivity(self):
         """Background task to stop vLLM after inactivity timeout."""
