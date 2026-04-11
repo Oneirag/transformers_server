@@ -56,7 +56,7 @@ class ChatCompletionRequest(BaseModel):
     model: str = DEFAULT_MODEL
     messages: List[Message]
     max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
+    temperature: Optional[float] = 0.01
     stream: Optional[bool] = False
     # Other optional parameters...
 
@@ -200,6 +200,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 "temperature": request.temperature or 0.01, # low temperature by default for more deterministic output
                 "do_sample": True if (request.temperature or 0.7) > 0 else False,
             }
+            print("Generate_kwargs", generate_kwargs)
 
             if request.stream:
                 from transformers import TextIteratorStreamer
